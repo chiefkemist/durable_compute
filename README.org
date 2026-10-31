@@ -44,11 +44,79 @@ because Fetch itself is durable, but because durability can be built around it.
 Deno's team announced one year of bug/security fixes in October 2026, then ending
 its runtime development; Deno remains open source.
 
+*** The same HTTP objects, different server adapters
+These are shortened excerpts/adaptations of the samples, not complete deployment
+files. The full projects retain validation, shutdown handling, bindings and
+migrations; the feature matrix maps the Cloudflare/celld pairs.[fn:feature-matrix]
+
+Start a Bun server using the =basic_server= routes. The handler receives a Web
+=Request= and returns a Web =Response=.[fn:basic-http]
+
+#+begin_src typescript
+Bun.serve({
+  port: 3000,
+  routes: {
+    "/": () => new Response("Hello, world!"),
+    "/health": () => Response.json({ status: "ok" }),
+    "/api/echo": {
+      POST: async (request: Request) =>
+        Response.json({ received: await request.json() }),
+    },
+  },
+  fetch: () => Response.json({ error: "Not found" }, { status: 404 }),
+});
+#+end_src
+
+A client uses those same Web APIs. This adapts =basic_client='s fetch/check/decode
+sequence to the local server; =Headers= and =AbortSignal= are Web APIs too.
+
+#+begin_src typescript
+const request = new Request("http://localhost:3000/health", {
+  headers: new Headers({ accept: "application/json" }),
+  signal: AbortSignal.timeout(5000),
+});
+const response = await fetch(request);
+if (!response.ok) throw new Error(`HTTP ${response.status}`);
+console.log(await response.json());
+#+end_src
+
+The richer =basic_app= shares =router.fetch= between Bun and Node. Bun accepts a
+Fetch handler directly; Node uses an HTTP adapter. Routing/application logic need
+not change with the listener.[fn:app-adapters]
+
+#+begin_src typescript
+import * as http from "node:http";
+import { createRequestListener } from "remix/node-fetch-server";
+import { router } from "./app/router.ts";
+
+http.createServer(createRequestListener(router.fetch)).listen(44100);
+// Bun alternative: Bun.serve({ port: 44100, fetch: (r) => router.fetch(r) });
+#+end_src
+
 ** Durable execution
 - *Workflows:* persist step results; after interruption, replay reuses completed
   steps and retries unfinished work. Make external effects idempotent.
 - *dquickts:* snapshot the JS heap and suspended stack at safepoints; restore and
   resume in another process using the same engine build. Host I/O is separate.
+
+The paired =basic_do_workflows= / =basic_celld_workflows= examples put an ordinary
+=fetch= inside a durable step. Excerpt from =ReportBuilder.run(event, step)=:
+
+#+begin_src typescript
+const report = await step.do("fetch source", async () => {
+  const response = await fetch(event.payload.url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const text = await response.text();
+  return { lines: text.split("\n").length };
+});
+await step.sleep("cool down", 2);
+await step.do("record", async () => ({ instance: event.instanceId, report }));
+return report;
+#+end_src
+
+The saved result is data, not a live =Response= or socket. On replay, a completed
+step returns that data without fetching again; an unfinished step can retry.
+The sleep does not require the original process to remain alive.[fn:workflow-samples]
 
 *** dquickts: save the running program, not just a step result
 The QuickJS extension demonstrates a deeper form of interruption and resumption:
@@ -67,6 +135,18 @@ host call, and =JS_ResumeWith()= can supply its result after restoring the runti
 The project's example uses a fetch-like host function to illustrate this boundary;
 it is not a built-in implementation of the standard Fetch API. The host still
 owns external I/O and safe handling of repeated side effects.[fn:host-calls]
+
+The C embedder's core API sequence is small. This excerpt assumes JS is already
+suspended; native registration, disk I/O and error handling are omitted. Between
+the write and read, the host can save the bytes, exit, and reload them in a new
+process.[fn:snapshots]
+
+#+begin_src c
+uint8_t *bytes = JS_WriteSnapshot(ctx, &len, &host, NULL, 0, 0);
+/* Persist bytes to disk; a later process reloads them into bytes. */
+JS_ReadSnapshot(rt2, bytes, len, NULL, 0, &host, &restored, err, sizeof(err));
+JSValue result = JS_Resume(restored.contexts[0]);
+#+end_src
 
 #+begin_src mermaid
 %%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
@@ -105,6 +185,52 @@ later. Cloudflare's WebSocket hibernation can keep clients connected while the
 object is out of memory. This recovers an actor from stored state rather than
 restoring its running stack as dquickts does.[fn:object-durability]
 
+In =basic_do_cells=, a Worker forwards HTTP to a stable object identity. The
+object handles =fetch= as before, but explicitly persists its counter instead of
+relying on a process-local variable.[fn:cell-samples]
+
+#+begin_src typescript
+import { DurableObject } from "cloudflare:workers";
+type Env = { COUNTER: DurableObjectNamespace<Counter> };
+
+export class Counter extends DurableObject<Env> {
+  async fetch(): Promise<Response> {
+    const n = ((await this.ctx.storage.get<number>("n")) ?? 0) + 1;
+    await this.ctx.storage.put("n", n);
+    return Response.json({ n });
+  }
+}
+
+export default {
+  fetch(request: Request, env: Env) {
+    const id = env.COUNTER.idFromName("demo");
+    return env.COUNTER.get(id).fetch(request);
+  },
+};
+#+end_src
+
+Other samples attach more capabilities to this model. These are independent
+handler excerpts—not one combined handler.[fn:actor-samples]
+
+#+begin_src typescript
+// basic_do_sql: query the object's private SQLite database.
+const total = this.ctx.storage.sql
+  .exec("SELECT coalesce(sum(cents), 0) AS cents FROM entries").one();
+
+// basic_do_alarms: arrange a future alarm() invocation, even after eviction.
+await this.ctx.storage.setAlarm(Date.now() + 5000);
+
+// basic_do_rpc: call a named actor's method instead of sending HTTP.
+const snapshot = await env.CART.getByName("demo").add("coffee");
+
+// basic_do_websockets: accept a socket using the hibernation-aware API.
+const pair = new WebSocketPair();
+this.ctx.acceptWebSocket(pair[1], ["chat"]);
+return new Response(null, { status: 101, webSocket: pair[0] });
+#+end_src
+
+The matching =basic_celld_*= packages demonstrate these APIs on your own fleet.
+
 #+begin_src mermaid
 %%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
 flowchart TB
@@ -134,6 +260,32 @@ V8 + per-cell SQLite + a shared object-storage bucket; compatibility gaps apply.
 Following the Deno team's move to Cloudflare, the announced plan is to merge
 celld's distributed self-hosting code and ideas into workerd—not a completed integration.
 
+=basic_celld_cells= uses a plain class with injected state rather than Cloudflare's
+base class. The HTTP contract, stable-name routing and explicit durable writes
+remain recognizably the same.[fn:cell-samples]
+
+#+begin_src typescript
+export class Counter {
+  constructor(private state: DurableObjectState) {}
+
+  async fetch(): Promise<Response> {
+    const n = ((await this.state.storage.get<number>("n")) ?? 0) + 1;
+    await this.state.storage.put("n", n);
+    return Response.json({ n });
+  }
+}
+
+export default {
+  fetch(request: Request, env: { COUNTER: DurableObjectNamespace }) {
+    return env.COUNTER.get(env.COUNTER.idFromName("demo")).fetch(request);
+  },
+};
+#+end_src
+
+Both samples declare the =COUNTER= binding and =Counter= SQLite-class migration
+in =wrangler.jsonc=. The source model is portable; storage ownership, deployment
+and operational guarantees still belong to the chosen platform.
+
 ** Languages that compile to JavaScript
 *** A language choice need not be a hosting choice
 ClojureScript, ReScript and TypeScript compile to JavaScript rather than requiring
@@ -158,6 +310,35 @@ changing runtimes instead of rebuilding the HTTP boundary. Runtime-specific
 features still require matching adapters and tests. ReScript can bind to the same
 Web APIs; FastTwitch is the ClojureScript example, not a requirement for other languages.
 
+The GitHub hello-world/native-HTTP samples and the library's =serve= macro reduce
+the server boundary to a Ring handler plus a runtime adapter.[fn:fasttwitch-examples]
+
+#+begin_src clojure
+(ns demo.http
+  (:require [fast-twitch.routing :as routing]
+            [fast-twitch.client.core :as client]
+            [fast-twitch.macros :refer-macros [serve]]))
+
+(defn hello [_request]
+  {:status 200
+   :headers {"Content-Type" "text/plain; charset=utf-8"}
+   :body "Hello from ClojureScript"})
+
+(def server
+  (serve :handler (routing/ft-handler hello
+                    {:protocol "HTTP/1.1" :remote-addr "127.0.0.1"})
+         :hostname "127.0.0.1" :port 6464))
+
+(-> (client/request! {:url "http://127.0.0.1:6464/"
+                      :request-method :get :headers {}}
+                     {:codec :text})
+    (.then (fn [response] (println (:body response)))))
+#+end_src
+
+Here =serve= selects the native server adapter. =client/request!= converts the
+request map to a native Fetch request and returns a response map; choosing
+=:codec :text= consumes the body, while the default native codec preserves streams.
+
 *** FastTwitch Celld: from HTTP handlers to named, stateful cells
 Consider a chat application: give each room its own cell instead of coordinating
 all rooms inside one server process. FastTwitch Celld adds ClojureScript cell
@@ -169,6 +350,41 @@ After eviction or restart, a new activation can reconstruct the room from that
 stored history. An ordinary ClojureScript =atom= is not automatically durable;
 neither is the call stack. This is Durable Objects-style state recovery, not
 dquickts-style execution snapshots. The extension is not yet release-ready.
+
+This short adaptation combines the GitHub direct-cell and storage examples.
+It uses the extension's pinned compiler and build pipeline; configuration and
+class-history files remain in the full examples.[fn:fasttwitch-cell-examples]
+
+#+begin_src clojure
+(ns demo.cells
+  (:require [cljs.core :refer [await]]
+            [fast-twitch.celld.context :as context]
+            [fast-twitch.celld.storage.kv :as kv]
+            [fast-twitch.celld.bindings :as bindings]
+            [fast-twitch.celld.identity :as identity]
+            [fast-twitch.celld.http :as http])
+  (:require-macros [fast-twitch.celld.macros
+                   :refer [deffetch defcell defworker]]))
+
+(deffetch counter-fetch [ctx _request]
+  (let [store (kv/native (context/storage ctx))
+        n (inc (or (:value (kv/get-value store :n)) 0))]
+    (kv/put! store :n n)
+    {:status 200 :body (str n)}))
+
+(defcell Counter {:binding :COUNTERS :include [counter-fetch]})
+
+(deffetch ^:async worker-fetch [ctx request]
+  (let [stub (identity/get-by-name
+               (bindings/get-binding ctx :COUNTERS) "demo")]
+    (await (http/forward! stub request))))
+
+(defworker App {:include [worker-fetch]})
+#+end_src
+
+The Worker forwards a Fetch-shaped request to a named cell. The cell still returns
+a ClojureScript response map, but its count is written to native durable KV—not
+an =atom=. The bridge changes how code reaches the platform, not who provides durability.
 
 #+begin_src mermaid
 %%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
@@ -201,6 +417,7 @@ and durable objects preserve an addressable unit's data and lifecycle. These are
 different ways to let modern workloads survive beyond a single request or process.
 
 ** References
+- [[https://chiefkemist@github.com/chiefkemist/durable_compute][This article's example repository]]
 - [[https://ubuntuhive.tech/en/events/the-ubuntu-techhive/from-javascript-runtimes-to-durable-compute][Event description]]
 - [[https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API][Fetch API]]
 - Web APIs: [[https://nodejs.org/api/globals.html][Node.js]], [[https://docs.deno.com/runtime/reference/web_platform_apis/][Deno]], [[https://bun.com/docs/runtime/web-apis][Bun]]
@@ -211,6 +428,22 @@ different ways to let modern workloads survive beyond a single request or proces
 - [[https://deno.com/blog/cloudflare][Deno's transition]]; [[https://blog.cloudflare.com/deno-joins-cloudflare/][celld/workerd integration plan]]
 - Languages: [[https://clojurescript.org/about/rationale][ClojureScript]]; [[https://rescript-lang.org/][ReScript]]
 - FastTwitch: [[http://fast-twitch-docs.fly.dev/][Documentation]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch][Source]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch-celld][Celld extension]]
+
+[fn:feature-matrix] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/README.md][Local sample feature matrix: paired Cloudflare and celld implementations]].
+
+[fn:basic-http] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_server/index.ts][Bun server: routes, Request/Response and shutdown]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_client/index.ts][Fetch client: status checking and JSON decoding]].
+
+[fn:app-adapters] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_app/server.ts][Node HTTP adapter]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_app/bun-server.ts][Bun listener for the same router]].
+
+[fn:workflow-samples] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_workflows/src/index.ts][Cloudflare workflow: fetch, persisted steps and sleep]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_celld_workflows/src/index.ts][Matching celld workflow]].
+
+[fn:cell-samples] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_cells/src/index.ts][Cloudflare counter and named routing]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_celld_cells/src/index.ts][Matching celld counter]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_cells/wrangler.jsonc][Binding and SQLite-class migration]].
+
+[fn:actor-samples] [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_sql/src/index.ts][Private SQLite]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_alarms/src/index.ts][Alarms]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_rpc/src/index.ts][RPC]]; [[https://github.com/chiefkemist/durable_compute/blob/main/packages/basic_do_websockets/src/index.ts][Hibernatable WebSockets]].
+
+[fn:fasttwitch-examples] [[https://github.com/OUTCASTGEEK-TECH/fast-twitch/blob/main/examples/01-hello-world/src/hello/server.cljs][FastTwitch hello-world server]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch/blob/main/examples/07-native-transports/src/native_demo/http.cljs][Native HTTP client/server example]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch/blob/main/src/fast_twitch/macros.cljc][serve macro and runtime adapters]].
+
+[fn:fasttwitch-cell-examples] [[https://github.com/OUTCASTGEEK-TECH/fast-twitch-celld/blob/main/examples/01-direct-cell/src/example/app.cljs][Direct cells and Fetch forwarding]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch-celld/blob/main/examples/02-rpc-sql-and-alarms/src/example/storage_app.cljs][Storage, SQL and alarms]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch-celld/blob/main/docs/authoring-and-migration.md][Build, class history and persistence rules]].
 
 [fn:workflows] [[https://developers.cloudflare.com/workflows/][Workflows: persistent steps, external waits and approvals]]; [[https://developers.cloudflare.com/workflows/build/rules-of-workflows/][Retries, state management and idempotency]].
 

@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "basic-do-location",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "REGION", "class_name": "Region" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Region"] }]
+}

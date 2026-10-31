@@ -1,0 +1,12 @@
+{
+  "name": "basic-celld-cron",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "TICKS", "class_name": "Ticker" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ticker"] }]
+}

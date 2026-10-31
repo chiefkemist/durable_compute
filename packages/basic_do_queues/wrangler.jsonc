@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "basic-do-queues",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "basic-do-jobs" }],
+    "consumers": [
+      {
+        "queue": "basic-do-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 2,
+        "dead_letter_queue": "basic-do-jobs-dead-letter"
+      },
+      { "queue": "basic-do-jobs-dead-letter" }
+    ]
+  }
+}

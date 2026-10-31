@@ -1,0 +1,6 @@
+{
+  "name": "basic-celld-dynamic-workers",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

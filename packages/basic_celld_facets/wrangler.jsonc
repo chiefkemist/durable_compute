@@ -1,0 +1,10 @@
+{
+  "name": "basic-celld-facets",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "SUPERVISOR", "class_name": "Supervisor" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Supervisor"] }]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "basic-celld-kv",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "kv_namespaces": [
+    {
+      "binding": "VALUES",
+      "id": "basic-celld-kv"
+    }
+  ]
+}

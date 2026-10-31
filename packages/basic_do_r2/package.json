@@ -1,0 +1,15 @@
+{
+  "name": "basic_do_r2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "typescript": "^7",
+    "wrangler": "^4"
+  }
+}

@@ -1,0 +1,39 @@
+# Deploy: fly apps create basic-celld-kv && fly storage create && fly deploy
+app = "basic-celld-kv"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+# celld drains and hands off cells on SIGTERM; allow its 40s shutdown budget.
+kill_timeout = "90s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  CELLD_ADDR = "0.0.0.0:8080"
+  CELLD_INTERNAL_ADDR = "127.0.0.1:8081"
+  CELLD_WATCH = "/tmp/celld"
+  CELLD_IDLE_EVICT_S = "300"
+  CELLD_SHUTDOWN_TOTAL_MS = "40000"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # celld reports 503 until the node joins the fleet and during a drain.
+  [[http_service.checks]]
+    grace_period = "60s"
+    interval = "30s"
+    method = "GET"
+    path = "/.well-known/celld/health"
+    timeout = "10s"
+
+[deploy]
+  release_command = "/app/scripts/deploy.sh"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 1024

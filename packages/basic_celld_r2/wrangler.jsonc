@@ -1,0 +1,11 @@
+{
+  "name": "basic-celld-r2",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "basic-celld-files"
+    }
+  ]
+}

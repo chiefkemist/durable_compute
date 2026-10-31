@@ -1,0 +1,12 @@
+{
+  "name": "basic-celld-workflows",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workflows": [
+    {
+      "binding": "REPORTS",
+      "name": "basic-celld-report",
+      "class_name": "ReportBuilder"
+    }
+  ]
+}

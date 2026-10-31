@@ -7,7 +7,15 @@
 #+HTML_DOCTYPE: html5
 
 * Durable Compute
-From JavaScript runtimes to portable, stateful computation.
+JavaScript is a common execution target; Web Platform APIs provide a shared
+interface across its runtimes. =fetch= connects browsers and servers, while the
+same =Request=/=Response= model also reaches named, stateful actors. The important
+shift is what the host can recover after a request—or an entire process—ends.
+
+Consider a workflow that fetches input, calls an AI service, waits hours for human
+approval, then publishes a result. Its lifetime exceeds any one HTTP request or
+server process. JavaScript runtimes and Web APIs supply a familiar programming
+model; durability lets that work outlive the execution that started it.[fn:workflows]
 
 ** Runtimes & Web Platform APIs
 An engine executes JavaScript; a runtime adds I/O. The shared Web API core:
@@ -27,6 +35,12 @@ Support varies by runtime/version; DOM, CORS, cookies and streaming are not unif
 *Client:* =fetch(request) -> Promise<Response>=.
 *Server:* =handler(Request) -> Response | Promise<Response>=; startup APIs differ.
 
+This common boundary is where the pieces connect: a =fetch= call can sit inside a
+durable workflow step, a =Request= can be routed to a named stateful object, and a
+host can suspend a program while external work completes. The HTTP interface
+stays familiar while the host adds persistence, scheduling and recovery—not
+because Fetch itself is durable, but because durability can be built around it.
+
 Deno's team announced one year of bug/security fixes in October 2026, then ending
 its runtime development; Deno remains open source.
 
@@ -36,12 +50,47 @@ its runtime development; Deno remains open source.
 - *dquickts:* snapshot the JS heap and suspended stack at safepoints; restore and
   resume in another process using the same engine build. Host I/O is separate.
 
+*** dquickts: save the running program, not just a step result
+The QuickJS extension demonstrates a deeper form of interruption and resumption:
+a host can pause JavaScript *even in the middle of a loop*, serialize the runtime
+heap and suspended call stack, and write that snapshot to disk. Objects, closures,
+local variables, pending promise jobs and the saved instruction position are part
+of the recoverable execution state.[fn:snapshots]
+
+The original host process can then exit. A new process loads the snapshot into a
+compatible engine build and resumes the program at the saved instruction, rather
+than rerunning the workflow to reconstruct its progress. This makes hibernation
+and long waits possible without keeping the original process resident.
+
+The connection to workflow I/O is equally important: =JS_SuspendCall()= can park a
+host call, and =JS_ResumeWith()= can supply its result after restoring the runtime.
+The project's example uses a fetch-like host function to illustrate this boundary;
+it is not a built-in implementation of the standard Fetch API. The host still
+owns external I/O and safe handling of repeated side effects.[fn:host-calls]
+
 #+begin_src mermaid
-flowchart LR
-  W["Workflow steps"] -->|checkpoint| L["Saved step results"]
-  L -->|"interruption / restart"| R["Replay / retry unfinished steps"]
-  P["Running JS"] --> S["Snapshot heap + stack"]
-  S -->|process exits| T["Restore + resume"]
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
+flowchart TB
+  subgraph WF["Workflow"]
+    direction TB
+    W1["Run a step"] --> W2[("Persist step result")]
+    W2 -->|"process restarts"| W3["Replay workflow<br/>Reuse saved results"]
+  end
+
+  subgraph JS["dquickts"]
+    direction TB
+    R1["Suspend inside a loop"] --> R2[("Heap + stack snapshot<br/>Written to disk")]
+    R2 -->|"new process"| R3["Restore + resume<br/>Saved instruction"]
+  end
+
+  classDef running fill:#f8fafc,stroke:#64748b,color:#0f172a
+  classDef saved fill:#eff6ff,stroke:#2563eb,color:#0f172a
+  classDef resumed fill:#ecfdf5,stroke:#059669,color:#0f172a
+  class W1,R1 running
+  class W2,R2 saved
+  class W3,R3 resumed
+  style WF fill:#fff,stroke:#cbd5e1,color:#0f172a
+  style JS fill:#fff,stroke:#cbd5e1,color:#0f172a
 #+end_src
 
 ** Durable Objects
@@ -50,13 +99,32 @@ Cloudflare layers distributed routing, storage, alarms and WebSocket hibernation
 onto workerd's Web API model. =fetch= is the HTTP seam, *not* durability itself;
 RPC is another entry point. Persisted state survives eviction; JS call stacks do not.
 
+For workflow-like workloads, these are complementary building blocks: one object
+can own a job or agent's state, persist progress, and schedule an alarm to continue
+later. Cloudflare's WebSocket hibernation can keep clients connected while the
+object is out of memory. This recovers an actor from stored state rather than
+restoring its running stack as dquickts does.[fn:object-durability]
+
 #+begin_src mermaid
-flowchart LR
-  C["Browser / server client"] -->|"fetch: Request"| W["Worker: fetch handler"]
-  W -->|Response| C
-  W -->|"Object ID + stub.fetch / RPC"| D["Durable Object / cell"]
-  D --- S["SQLite/KV + alarms + WebSocket hibernation"]
-  W --- B["Bindings: KV / D1 / R2 / Queues / Workflows"]
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
+flowchart TB
+  C["Browser or server<br/>fetch(request)"]
+  W["Worker<br/>Request → Response"]
+  D["Durable Object / cell<br/>Named fetch handler"]
+  S[("Private SQLite / KV<br/>Survives eviction")]
+  E["Wake-up events<br/>Alarm / WebSocket"]
+
+  C <-->|"Request / Response"| W
+  W <-->|"Object ID + stub.fetch"| D
+  D <-->|"read / write"| S
+  E -.->|wake| D
+
+  classDef handler fill:#f8fafc,stroke:#64748b,color:#0f172a
+  classDef actor fill:#ecfdf5,stroke:#059669,color:#0f172a
+  classDef saved fill:#eff6ff,stroke:#2563eb,color:#0f172a
+  class C,W,E handler
+  class D actor
+  class S saved
 #+end_src
 
 ** celld: provider-neutral deployment
@@ -65,6 +133,72 @@ V8 + per-cell SQLite + a shared object-storage bucket; compatibility gaps apply.
 
 Following the Deno team's move to Cloudflare, the announced plan is to merge
 celld's distributed self-hosting code and ideas into workerd—not a completed integration.
+
+** Languages that compile to JavaScript
+*** A language choice need not be a hosting choice
+ClojureScript, ReScript and TypeScript compile to JavaScript rather than requiring
+a separate production VM. Their interop/bindings expose =fetch=, streams and other
+host APIs: choosing a language need not mean abandoning JavaScript's runtime ecosystem.
+
+ClojureScript's data structures or ReScript's types do not change the
+=Request=/=Response= boundary. Compatible output can target browsers, servers or
+durable hosts. This is interface portability, not a guarantee that every bundle
+runs unchanged: emitted JS, modules and dependencies must fit the host. DOM-only
+code and Node-specific libraries remain platform constraints.
+
+*** FastTwitch: ClojureScript maps, native Fetch
+FastTwitch expresses HTTP applications as Ring-style request/response maps and
+ordinary handler functions and middleware. Its adapters bridge those maps to
+native =Request=/=Response= objects; its clients use native =fetch=, body streams
+and request options. Node HTTP, =Deno.serve= and =Bun.serve= differ underneath,
+but the application-facing handler contract stays consistent.
+
+*The practical benefit:* reuse routing, authentication and application logic when
+changing runtimes instead of rebuilding the HTTP boundary. Runtime-specific
+features still require matching adapters and tests. ReScript can bind to the same
+Web APIs; FastTwitch is the ClojureScript example, not a requirement for other languages.
+
+*** FastTwitch Celld: from HTTP handlers to named, stateful cells
+Consider a chat application: give each room its own cell instead of coordinating
+all rooms inside one server process. FastTwitch Celld adds ClojureScript cell
+declarations, HTTP/RPC entry points, storage, alarms and WebSocket bindings.
+HTTP still uses the Fetch model; the platform routes each room to its named cell,
+and application code persists message history in that cell's SQLite/KV storage.
+
+After eviction or restart, a new activation can reconstruct the room from that
+stored history. An ordinary ClojureScript =atom= is not automatically durable;
+neither is the call stack. This is Durable Objects-style state recovery, not
+dquickts-style execution snapshots. The extension is not yet release-ready.
+
+#+begin_src mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 24, "rankSpacing": 32}}}%%
+flowchart TB
+  H["ClojureScript application<br/>Handlers + middleware"]
+  F["FastTwitch<br/>Native Fetch adapters"]
+  N["Node · Deno · Bun<br/>HTTP application"]
+  X["FastTwitch Celld<br/>Cell entry points"]
+  C["Cell: room-42<br/>HTTP · RPC · events"]
+  S[("Private SQLite / KV<br/>Message history")]
+
+  H --> F
+  F --> N
+  F -->|extend| X
+  X --> C
+  C <-->|"persist / restore"| S
+
+  classDef application fill:#f8fafc,stroke:#64748b,color:#0f172a
+  classDef bridge fill:#eff6ff,stroke:#2563eb,color:#0f172a
+  classDef durable fill:#ecfdf5,stroke:#059669,color:#0f172a
+  class H,N application
+  class F,X bridge
+  class C,S durable
+#+end_src
+
+*The through-line:* shared runtimes and Web APIs make this a common application
+model, not a separate networking stack for every language or host. Workflow
+journals preserve completed work, runtime snapshots preserve execution state,
+and durable objects preserve an addressable unit's data and lifecycle. These are
+different ways to let modern workloads survive beyond a single request or process.
 
 ** References
 - [[https://ubuntuhive.tech/en/events/the-ubuntu-techhive/from-javascript-runtimes-to-durable-compute][Event description]]
@@ -75,3 +209,13 @@ celld's distributed self-hosting code and ideas into workerd—not a completed i
 - [[https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/][Durable Objects]]; [[https://developers.cloudflare.com/workflows/build/sleeping-and-retrying/][Workflow sleep/retries]]
 - [[https://celld.dev/][celld]]; [[https://celld.dev/docs/cloudflare-compat][Compatibility]]
 - [[https://deno.com/blog/cloudflare][Deno's transition]]; [[https://blog.cloudflare.com/deno-joins-cloudflare/][celld/workerd integration plan]]
+- Languages: [[https://clojurescript.org/about/rationale][ClojureScript]]; [[https://rescript-lang.org/][ReScript]]
+- FastTwitch: [[http://fast-twitch-docs.fly.dev/][Documentation]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch][Source]]; [[https://github.com/OUTCASTGEEK-TECH/fast-twitch-celld][Celld extension]]
+
+[fn:workflows] [[https://developers.cloudflare.com/workflows/][Workflows: persistent steps, external waits and approvals]]; [[https://developers.cloudflare.com/workflows/build/rules-of-workflows/][Retries, state management and idempotency]].
+
+[fn:snapshots] [[https://github.com/earendil-works/dquickts#what-a-snapshot-is][dquickts: snapshot contents]]; [[https://github.com/earendil-works/dquickts#when-you-can-take-one][Suspension and safepoints]]; [[https://github.com/earendil-works/dquickts#example-hibernating-in-the-middle-of-a-loop][Example: interrupt a loop and resume in a fresh runtime]]; [[https://github.com/earendil-works/dquickts#durable-repl][Durable REPL with state saved to disk]].
+
+[fn:host-calls] [[https://github.com/earendil-works/dquickts#durable-host-calls][dquickts: suspend a host call and deliver its result after restoration]]; [[https://github.com/earendil-works/dquickts#the-hosts-side-of-the-contract][Host responsibilities]]; [[https://github.com/earendil-works/dquickts#limitations][Snapshot limitations]].
+
+[fn:object-durability] [[https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/][Durable Object storage]]; [[https://developers.cloudflare.com/durable-objects/api/alarms/][Scheduled wake-ups and alarm retries]]; [[https://developers.cloudflare.com/durable-objects/best-practices/websockets/][WebSocket hibernation and state reconstruction]].

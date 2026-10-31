@@ -1,0 +1,6 @@
+node_modules
+.celld
+.wrangler
+.dev.vars
+.env
+.env.local

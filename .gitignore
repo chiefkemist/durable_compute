@@ -7,3 +7,9 @@ scratch
 .envrc
 node_modules/
 
+# celld
+.celld/
+.wrangler/
+.dev.vars
+.env
+.env.local

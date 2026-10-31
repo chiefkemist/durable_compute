@@ -1,0 +1,4 @@
+:root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; display: grid; min-height: 100vh; place-items: center; }
+main { max-width: 44rem; padding: 2rem; line-height: 1.6; }
+code { background: color-mix(in srgb, currentColor 12%, transparent); padding: 0.1em 0.35em; border-radius: 0.25rem; }

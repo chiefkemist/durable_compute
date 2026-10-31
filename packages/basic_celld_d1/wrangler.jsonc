@@ -1,0 +1,12 @@
+{
+  "name": "basic-celld-d1",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "basic-celld-d1",
+      "database_id": "basic-celld-d1"
+    }
+  ]
+}

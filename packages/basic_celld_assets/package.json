@@ -1,0 +1,10 @@
+{
+  "name": "basic_celld_assets",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "celld dev .",
+    "deploy": "scripts/deploy.sh",
+    "fly": "fly deploy"
+  }
+}

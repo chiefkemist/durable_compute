@@ -1,0 +1,77 @@
+#+TITLE: How fetch Connects JavaScript Runtimes to Durable Compute
+#+AUTHOR: ChiefKemist
+#+DATE: <2026-10-31 Sat>
+#+DESCRIPTION: Supporting notes on JavaScript runtimes, Web Platform APIs, durable execution, Durable Objects and celld.
+#+KEYWORDS: AI, Celld, ClojureScript, Cloudflare, Durable_Objects, JavaScript, Pi_dev, ReScript, SQLite, Typescript
+#+LANGUAGE: en
+#+HTML_DOCTYPE: html5
+
+* Durable Compute
+From JavaScript runtimes to portable, stateful computation.
+
+** Runtimes & Web Platform APIs
+An engine executes JavaScript; a runtime adds I/O. The shared Web API core:
+=fetch=, =Request=, =Response=, =Headers=, streams, =URL= and Web Crypto.
+
+| Runtime | Typical environment | Web API support |
+|---------+---------------------+-----------------|
+| Browser | Client | Core + DOM |
+| Node.js | Server / cloud VM | Core; HTTP server adapters |
+| Deno | Server / cloud VM | Core; =Deno.serve= |
+| Bun | Server / cloud VM | Core; =Bun.serve= |
+| QuickJS | Embedded engine | Web APIs supplied by host |
+| workerd | Cloudflare / self-hosted | Worker subset; =fetch= handler |
+| celld | Self-hosted fleet | Workers-compatible subset |
+
+Support varies by runtime/version; DOM, CORS, cookies and streaming are not uniform.
+*Client:* =fetch(request) -> Promise<Response>=.
+*Server:* =handler(Request) -> Response | Promise<Response>=; startup APIs differ.
+
+Deno's team announced one year of bug/security fixes in October 2026, then ending
+its runtime development; Deno remains open source.
+
+** Durable execution
+- *Workflows:* persist step results; after interruption, replay reuses completed
+  steps and retries unfinished work. Make external effects idempotent.
+- *dquickts:* snapshot the JS heap and suspended stack at safepoints; restore and
+  resume in another process using the same engine build. Host I/O is separate.
+
+#+begin_src mermaid
+flowchart LR
+  W["Workflow steps"] -->|checkpoint| L["Saved step results"]
+  L -->|"interruption / restart"| R["Replay / retry unfinished steps"]
+  P["Running JS"] --> S["Snapshot heap + stack"]
+  S -->|process exits| T["Restore + resume"]
+#+end_src
+
+** Durable Objects
+A named, single-threaded actor owns strongly consistent SQLite/KV storage.
+Cloudflare layers distributed routing, storage, alarms and WebSocket hibernation
+onto workerd's Web API model. =fetch= is the HTTP seam, *not* durability itself;
+RPC is another entry point. Persisted state survives eviction; JS call stacks do not.
+
+#+begin_src mermaid
+flowchart LR
+  C["Browser / server client"] -->|"fetch: Request"| W["Worker: fetch handler"]
+  W -->|Response| C
+  W -->|"Object ID + stub.fetch / RPC"| D["Durable Object / cell"]
+  D --- S["SQLite/KV + alarms + WebSocket hibernation"]
+  W --- B["Bindings: KV / D1 / R2 / Queues / Workflows"]
+#+end_src
+
+** celld: provider-neutral deployment
+celld brings the Workers/Durable Objects model to your infrastructure:
+V8 + per-cell SQLite + a shared object-storage bucket; compatibility gaps apply.
+
+Following the Deno team's move to Cloudflare, the announced plan is to merge
+celld's distributed self-hosting code and ideas into workerd—not a completed integration.
+
+** References
+- [[https://ubuntuhive.tech/en/events/the-ubuntu-techhive/from-javascript-runtimes-to-durable-compute][Event description]]
+- [[https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API][Fetch API]]
+- Web APIs: [[https://nodejs.org/api/globals.html][Node.js]], [[https://docs.deno.com/runtime/reference/web_platform_apis/][Deno]], [[https://bun.com/docs/runtime/web-apis][Bun]]
+- Engines: [[https://bellard.org/quickjs/][QuickJS]], [[https://github.com/earendil-works/dquickts][dquickts]]
+- [[https://github.com/cloudflare/workerd][workerd]]; [[https://developers.cloudflare.com/workers/runtime-apis/web-standards/][Workers Web APIs]]
+- [[https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/][Durable Objects]]; [[https://developers.cloudflare.com/workflows/build/sleeping-and-retrying/][Workflow sleep/retries]]
+- [[https://celld.dev/][celld]]; [[https://celld.dev/docs/cloudflare-compat][Compatibility]]
+- [[https://deno.com/blog/cloudflare][Deno's transition]]; [[https://blog.cloudflare.com/deno-joins-cloudflare/][celld/workerd integration plan]]

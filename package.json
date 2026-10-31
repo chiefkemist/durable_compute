@@ -1,0 +1,7 @@
+{
+  "name": "durable_compute",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}

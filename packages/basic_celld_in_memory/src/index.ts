@@ -1,7 +1,5 @@
-import { DurableObject } from "cloudflare:workers";
-
 interface Env {
-  LIMITER: DurableObjectNamespace<RateLimiter>;
+  LIMITER: DurableObjectNamespace;
 }
 
 /**
@@ -9,22 +7,23 @@ interface Env {
  * consecutive events, but not hibernation or an ownership move: celld runs the
  * constructor again on the next activation, so restore the field from storage.
  */
-export class RateLimiter extends DurableObject {
+export class RateLimiter {
+  private readonly state: DurableObjectState;
   private hits = 0;
   private readonly limit = 5;
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+  constructor(state: DurableObjectState) {
+    this.state = state;
     // No event is delivered until this completes.
-    ctx.blockConcurrencyWhile(async () => {
-      this.hits = (await ctx.storage.get<number>("hits")) ?? 0;
+    state.blockConcurrencyWhile(async () => {
+      this.hits = (await state.storage.get<number>("hits")) ?? 0;
     });
   }
 
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/reset") {
       this.hits = 0;
-      await this.ctx.storage.delete("hits");
+      await this.state.storage.delete("hits");
       return Response.json({ hits: this.hits });
     }
 
@@ -32,7 +31,7 @@ export class RateLimiter extends DurableObject {
     const allowed = this.hits <= this.limit;
     // A real limiter would batch this write; the demo flushes each request so
     // the count survives an eviction.
-    await this.ctx.storage.put("hits", this.hits);
+    await this.state.storage.put("hits", this.hits);
 
     return Response.json({ allowed, hits: this.hits, limit: this.limit });
   }

@@ -2,7 +2,8 @@
 
 celld **Durable Object Facets**: a supervisor cell starts a child object from
 dynamically loaded code. The facet gets its own SQLite database, and the
-supervisor's database stays unreadable to it.
+supervisor's database stays unreadable to it. Both are plain classes with a
+`(state, env)` constructor, as the celld docs allow.
 
 ## Local
 

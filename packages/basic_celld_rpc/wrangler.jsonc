@@ -2,6 +2,7 @@
   "name": "basic-celld-rpc",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["js_rpc"],
   "durable_objects": {
     "bindings": [{ "name": "CART", "class_name": "Cart" }]
   },

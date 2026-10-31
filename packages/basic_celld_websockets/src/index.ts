@@ -1,29 +1,36 @@
-import { DurableObject } from "cloudflare:workers";
-
 interface Env {
-  ROOM: DurableObjectNamespace<Room>;
+  ROOM: DurableObjectNamespace;
 }
 
 /**
- * A chat room is one cell. `ctx.acceptWebSocket()` accepts a hibernatable
+ * A chat room is one cell. `state.acceptWebSocket()` accepts a hibernatable
  * socket: the cell can leave memory while clients stay connected, and celld
  * calls webSocketMessage() when the next frame arrives.
  */
-export class Room extends DurableObject {
+export class Room {
+  private readonly state: DurableObjectState;
+
+  constructor(state: DurableObjectState) {
+    this.state = state;
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
-      return Response.json({ room: this.ctx.id.name ?? null, clients: this.ctx.getWebSockets().length });
+      return Response.json({
+        room: this.state.id.name ?? null,
+        clients: this.state.getWebSockets().length,
+      });
     }
 
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1]);
-    pair[1].send(`joined ${this.ctx.id.name ?? "room"}\n`);
+    this.state.acceptWebSocket(pair[1]);
+    pair[1].send(`joined ${this.state.id.name ?? "room"}\n`);
 
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    for (const peer of this.ctx.getWebSockets()) {
+    for (const peer of this.state.getWebSockets()) {
       if (peer === ws) continue;
       try {
         peer.send(message);
@@ -34,7 +41,11 @@ export class Room extends DurableObject {
   }
 
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    console.log("socket closed", { code, reason, remaining: this.ctx.getWebSockets().length });
+    console.log("socket closed", {
+      code,
+      reason,
+      remaining: this.state.getWebSockets().length,
+    });
   }
 }
 

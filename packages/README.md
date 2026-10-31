@@ -157,7 +157,10 @@ Each README lists the exact commands.
 - A celld **cell** is a Cloudflare **Durable Object**: one named, single-threaded
   actor with private SQLite. celld spreads ownership across your nodes and
   stores replication data in your bucket; Cloudflare hides placement and
-  migration.
+  migration. Celld docs implement cells as plain classes with a
+  `(state, env)` constructor, and the `basic_celld_*` projects follow that
+  style; the `basic_do_*` projects use Cloudflare's `DurableObject` base class,
+  which also carries RPC typing.
 - **KV**: celld reads always reach the owning cell, so they are strongly
   consistent; Workers KV is eventually consistent and edge-cached
   (`cacheTtl`). celld ignores `cacheTtl`.

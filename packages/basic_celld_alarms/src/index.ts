@@ -1,46 +1,50 @@
-import { DurableObject } from "cloudflare:workers";
-
 interface Env {
-  REMINDER: DurableObjectNamespace<Reminder>;
+  REMINDER: DurableObjectNamespace;
 }
 
 /** One alarm per cell; celld only answers setAlarm() once it is durable. */
-export class Reminder extends DurableObject {
+export class Reminder {
+  private readonly state: DurableObjectState;
+
+  constructor(state: DurableObjectState) {
+    this.state = state;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/cancel") {
-      await this.ctx.storage.deleteAlarm();
-      return Response.json({ alarm: await this.ctx.storage.getAlarm() });
+      await this.state.storage.deleteAlarm();
+      return Response.json({ alarm: await this.state.storage.getAlarm() });
     }
 
     if (request.method === "POST") {
       const seconds = Math.max(1, Number(url.searchParams.get("in") ?? 5));
-      await this.ctx.storage.put(
+      await this.state.storage.put(
         "note",
         url.searchParams.get("note") ?? "wake up",
       );
-      await this.ctx.storage.delete("firedAt");
-      await this.ctx.storage.setAlarm(Date.now() + seconds * 1000);
+      await this.state.storage.delete("firedAt");
+      await this.state.storage.setAlarm(Date.now() + seconds * 1000);
 
       return Response.json({
-        scheduledFor: await this.ctx.storage.getAlarm(),
+        scheduledFor: await this.state.storage.getAlarm(),
         inSeconds: seconds,
       });
     }
 
-    const note = await this.ctx.storage.get<string>("note");
-    const firedAt = await this.ctx.storage.get<number>("firedAt");
+    const note = await this.state.storage.get<string>("note");
+    const firedAt = await this.state.storage.get<number>("firedAt");
     return Response.json({
       note: note ?? null,
       firedAt: firedAt ?? null,
-      alarm: await this.ctx.storage.getAlarm(),
+      alarm: await this.state.storage.getAlarm(),
     });
   }
 
   async alarm(info?: AlarmInvocationInfo): Promise<void> {
-    const note = (await this.ctx.storage.get<string>("note")) ?? "unknown";
-    await this.ctx.storage.put({ note, firedAt: Date.now() });
+    const note = (await this.state.storage.get<string>("note")) ?? "unknown";
+    await this.state.storage.put({ note, firedAt: Date.now() });
     console.log("alarm fired", {
       note,
       isRetry: info?.isRetry ?? false,

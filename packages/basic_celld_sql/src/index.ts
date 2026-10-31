@@ -1,7 +1,5 @@
-import { DurableObject } from "cloudflare:workers";
-
 interface Env {
-  LEDGER: DurableObjectNamespace<Ledger>;
+  LEDGER: DurableObjectNamespace;
 }
 
 interface Entry extends Record<string, SqlStorageValue> {
@@ -12,12 +10,13 @@ interface Entry extends Record<string, SqlStorageValue> {
 }
 
 /** A cell can query its private SQLite file synchronously. */
-export class Ledger extends DurableObject {
+export class Ledger {
+  private readonly state: DurableObjectState;
   private readonly sql: SqlStorage;
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.sql = ctx.storage.sql;
+  constructor(state: DurableObjectState) {
+    this.state = state;
+    this.sql = state.storage.sql;
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +32,7 @@ export class Ledger extends DurableObject {
       const body = await request.json<{ memo?: string; cents?: number }>();
 
       // transactionSync() groups writes atomically; a throw rolls them back.
-      const row = this.ctx.storage.transactionSync(() =>
+      const row = this.state.storage.transactionSync(() =>
         this.sql
           .exec<Entry>(
             "INSERT INTO entries (memo, cents, at) VALUES (?, ?, ?) RETURNING id, memo, cents, at",

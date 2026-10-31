@@ -1,7 +1,5 @@
-import { DurableObject } from "cloudflare:workers";
-
 interface Env {
-  TICKS: DurableObjectNamespace<Ticker>;
+  TICKS: DurableObjectNamespace;
 }
 
 interface Tick {
@@ -11,23 +9,29 @@ interface Tick {
 }
 
 /** Cron occurrences are recorded in a cell so they survive the isolate. */
-export class Ticker extends DurableObject {
+export class Ticker {
+  private readonly state: DurableObjectState;
+
+  constructor(state: DurableObjectState) {
+    this.state = state;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "POST") {
-      const previous = (await this.ctx.storage.get<Tick>("last")) ?? null;
+      const previous = (await this.state.storage.get<Tick>("last")) ?? null;
       const tick: Tick = {
         cron: url.searchParams.get("cron") ?? "manual",
         scheduledTime: Number(url.searchParams.get("scheduledTime") ?? Date.now()),
         recordedAt: Date.now(),
       };
-      await this.ctx.storage.put("last", tick);
+      await this.state.storage.put("last", tick);
       return Response.json({ previous, tick });
     }
 
     return Response.json({
-      last: (await this.ctx.storage.get<Tick>("last")) ?? null,
+      last: (await this.state.storage.get<Tick>("last")) ?? null,
     });
   }
 }

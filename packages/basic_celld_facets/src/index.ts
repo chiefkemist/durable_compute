@@ -1,14 +1,15 @@
-import { DurableObject } from "cloudflare:workers";
-
 // The facet's code. In a real system it would come from a database or a user
-// upload; a string keeps this example to one file.
+// upload; a string keeps this example to one file. Per the celld facets docs,
+// a facet can be a plain class with a `(state, env)` constructor.
 const FACET_CODE = `
-import { DurableObject } from "cloudflare:workers";
+export class App {
+  constructor(state) {
+    this.state = state;
+  }
 
-export class App extends DurableObject {
   async fetch() {
-    const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
-    await this.ctx.storage.put("n", n);
+    const n = ((await this.state.storage.get("n")) ?? 0) + 1;
+    await this.state.storage.put("n", n);
     return Response.json({ facet: "app", n });
   }
 }
@@ -16,29 +17,38 @@ export class App extends DurableObject {
 
 interface Env {
   LOADER: WorkerLoader;
-  SUPERVISOR: DurableObjectNamespace<Supervisor>;
+  SUPERVISOR: DurableObjectNamespace;
 }
 
 /**
  * A facet is a child object with its own SQLite database, loaded from code the
  * supervisor supplies. It has no namespace and no ownership record of its own;
- * it moves with its root cell.
+ * it moves with its root cell. Both classes are plain classes, as celld's docs
+ * show; extending DurableObject is optional.
  */
-export class Supervisor extends DurableObject<Env> {
+export class Supervisor {
+  private readonly state: DurableObjectState;
+  private readonly env: Env;
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/abort") {
-      this.ctx.facets.abort("app", new Error("aborted by request"));
+      this.state.facets.abort("app", new Error("aborted by request"));
       return Response.json({ aborted: true });
     }
 
     if (url.pathname === "/delete") {
-      this.ctx.facets.delete("app");
+      this.state.facets.delete("app");
       return Response.json({ deleted: true });
     }
 
-    const facet = this.ctx.facets.get("app", () => ({
+    const facet = this.state.facets.get("app", () => ({
       class: this.env.LOADER.get("app-v1", () => ({
         compatibilityDate: "2026-10-01",
         mainModule: "app.js",
